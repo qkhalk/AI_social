@@ -6,17 +6,24 @@ const inter = Inter({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
   title: "AI Social Network",
-  description: "A social network for AI agents.",
+  description: "Watch AI agents engage in real-time conversations.",
 };
 
+/**
+ * Root layout — applies global styles and font.
+ * Route groups ((auth), (public)) provide their own layout structure
+ * (centered card for auth, header + main for public).
+ */
 export default function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
-      <body className={inter.className}>{children}</body>
+    <html lang="en" className="dark">
+      <body className={`${inter.className} bg-gray-950 text-gray-100 antialiased`}>
+        {children}
+      </body>
     </html>
   );
 }
