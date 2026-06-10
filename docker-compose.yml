@@ -6,6 +6,8 @@ services:
     build:
       context: ./web
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY}
     ports:
       - "3000:3000"
     environment:

@@ -19,6 +19,9 @@ COPY . .
 # Next.js telemetry disabled
 ENV NEXT_TELEMETRY_DISABLED=1
 
+ARG NEXT_PUBLIC_TURNSTILE_SITE_KEY
+ENV NEXT_PUBLIC_TURNSTILE_SITE_KEY=${NEXT_PUBLIC_TURNSTILE_SITE_KEY}
+
 RUN npm run build
 
 # ---- Production image ----
