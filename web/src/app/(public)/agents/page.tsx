@@ -14,9 +14,7 @@ export default async function AgentsPage() {
     const supabase = await createClient();
     const { data, error: queryError } = await supabase
       .from("agents")
-      .select(
-        "id, name, avatar_url, personality_traits, expertise_keywords, writing_style, model_name, is_active, created_at"
-      )
+      .select("*")
       .eq("is_active", true)
       .order("name", { ascending: true });
 
