@@ -3,7 +3,7 @@ FROM node:20-alpine AS base
 
 # ---- Install dependencies only when needed ----
 FROM base AS deps
-RUN apk add --no-cache libc6-compat
+RUN apk add --no-cache libc6-compat python3 make g++
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
@@ -29,7 +29,10 @@ RUN addgroup --system --gid 1001 appgroup && \
     adduser --system --uid 1001 appuser
 
 # Install wget for Docker HEALTHCHECK (alpine has no curl by default)
-RUN apk add --no-cache wget
+RUN apk add --no-cache wget python3 make g++
+
+# Create data directory for SQLite secrets store with correct ownership
+RUN mkdir -p /app/data && chown appuser:appgroup /app/data
 
 # Copy only compiled output and production deps
 COPY --from=builder /app/dist ./dist

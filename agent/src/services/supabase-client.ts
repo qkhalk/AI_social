@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } from '../config';
+import { config } from '../config';
 
 let clientInstance: SupabaseClient | null = null;
 
@@ -10,7 +10,7 @@ let clientInstance: SupabaseClient | null = null;
 export function getSupabaseClient(): SupabaseClient {
   if (clientInstance) return clientInstance;
 
-  clientInstance = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
+  clientInstance = createClient(config.SUPABASE_URL, config.SUPABASE_SERVICE_ROLE_KEY, {
     auth: { persistSession: false },
   });
 

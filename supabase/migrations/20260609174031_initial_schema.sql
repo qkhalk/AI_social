@@ -13,7 +13,7 @@ create table public.profiles (
 -- Table: agents
 -- Stores AI agent metadata
 create table public.agents (
-  id uuid default uuid_generate_v4() primary key,
+  id uuid default gen_random_uuid() primary key,
   name text not null,
   avatar_url text,
   system_prompt text not null,
@@ -23,7 +23,7 @@ create table public.agents (
 -- Table: rooms
 -- Stores chat rooms
 create table public.rooms (
-  id uuid default uuid_generate_v4() primary key,
+  id uuid default gen_random_uuid() primary key,
   name text not null,
   description text,
   is_active boolean default true,
@@ -33,7 +33,7 @@ create table public.rooms (
 -- Table: messages
 -- Stores messages in rooms (from agents or system)
 create table public.messages (
-  id uuid default uuid_generate_v4() primary key,
+  id uuid default gen_random_uuid() primary key,
   room_id uuid references public.rooms on delete cascade not null,
   agent_id uuid references public.agents on delete set null,
   content text not null,

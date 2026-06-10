@@ -1,4 +1,6 @@
 import { getSupabaseClient } from './supabase-client';
+import { getEncryptionKey } from '../config';
+import { encrypt, decrypt } from './encryption-service';
 import { RoomWithAgents, Message, Agent } from '../types';
 
 /**
@@ -38,13 +40,14 @@ export async function fetchActiveRoomsWithAgents(): Promise<RoomWithAgents[]> {
 
 /**
  * Fetch the most recent N messages in a room, newest first.
- * Caller reverses order when feeding to LLM context.
+ * Decrypts message content after fetching from Supabase.
  */
 export async function fetchRecentMessages(
   roomId: string,
   limit: number = 20
 ): Promise<Message[]> {
   const client = getSupabaseClient();
+  const key = getEncryptionKey();
 
   const { data, error } = await client
     .from('messages')
@@ -57,11 +60,16 @@ export async function fetchRecentMessages(
     throw new Error(`Failed to fetch messages for room ${roomId}: ${error.message}`);
   }
 
-  return (data as Message[]) || [];
+  // Decrypt content for each message
+  return ((data as Message[]) || []).map((msg) => ({
+    ...msg,
+    content: decryptMessageContent(msg.content, key),
+  }));
 }
 
 /**
  * Insert an agent's response into the messages table.
+ * Content is encrypted before storage.
  */
 export async function insertAgentMessage(
   roomId: string,
@@ -69,11 +77,13 @@ export async function insertAgentMessage(
   content: string
 ): Promise<void> {
   const client = getSupabaseClient();
+  const key = getEncryptionKey();
+  const encryptedContent = encrypt(content, key);
 
   const { error } = await client.from('messages').insert({
     room_id: roomId,
     agent_id: agentId,
-    content,
+    content: encryptedContent,
     sender_type: 'agent',
   });
 
@@ -84,17 +94,20 @@ export async function insertAgentMessage(
 
 /**
  * Insert a system message (no agent author). Used for room lifecycle events.
+ * Content is encrypted before storage.
  */
 export async function insertSystemMessage(
   roomId: string,
   content: string
 ): Promise<void> {
   const client = getSupabaseClient();
+  const key = getEncryptionKey();
+  const encryptedContent = encrypt(content, key);
 
   const { error } = await client.from('messages').insert({
     room_id: roomId,
     agent_id: null,
-    content,
+    content: encryptedContent,
     sender_type: 'system',
   });
 
@@ -111,7 +124,6 @@ export async function updateRoomStatus(
   status: string
 ): Promise<void> {
   const client = getSupabaseClient();
-
   const update: Record<string, unknown> = { status };
 
   if (status === 'concluded') {
@@ -130,6 +142,7 @@ export async function updateRoomStatus(
 
 /**
  * Get total message count for a room (used by termination checker).
+ * Does not read content, so no decryption needed.
  */
 export async function getRoomMessageCount(roomId: string): Promise<number> {
   const client = getSupabaseClient();
@@ -144,4 +157,18 @@ export async function getRoomMessageCount(roomId: string): Promise<number> {
   }
 
   return count ?? 0;
+}
+
+/**
+ * Decrypt message content with error handling.
+ * Returns the encrypted string as-is if decryption fails (graceful degradation).
+ */
+function decryptMessageContent(content: string, key: string): string {
+  try {
+    return decrypt(content, key);
+  } catch {
+    // Return raw content if decryption fails — may be a pre-encryption message
+    console.warn('[message-service] Failed to decrypt message, returning raw content');
+    return content;
+  }
 }

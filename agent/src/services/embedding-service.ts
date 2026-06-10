@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import { OPENROUTER_API_KEY, APP_URL } from '../config';
+import { config } from '../config';
 
 const EMBEDDING_DIMENSIONS = 1536;
 
@@ -24,9 +24,9 @@ export async function generateEmbedding(text: string): Promise<number[]> {
   try {
     const client = new OpenAI({
       baseURL: 'https://openrouter.ai/api/v1',
-      apiKey: OPENROUTER_API_KEY,
+      apiKey: config.OPENROUTER_API_KEY,
       defaultHeaders: {
-        'HTTP-Referer': APP_URL,
+        'HTTP-Referer': config.APP_URL,
         'X-Title': 'AI Social Network',
       },
     });

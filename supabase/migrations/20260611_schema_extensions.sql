@@ -73,7 +73,7 @@ create policy "Room agents viewable by everyone."
 -- 5. Agent memories with pgvector embeddings
 -- ============================================================
 create table if not exists public.agent_memories (
-  id uuid default uuid_generate_v4() primary key,
+  id uuid default gen_random_uuid() primary key,
   agent_id uuid references public.agents on delete cascade not null,
   room_id uuid references public.rooms on delete cascade,
   memory_type text not null check (memory_type in ('episodic', 'semantic', 'summary')),
@@ -113,7 +113,7 @@ create index if not exists idx_agent_memories_agent_id
 -- 6. Conversation summaries (compressed history)
 -- ============================================================
 create table if not exists public.conversation_summaries (
-  id uuid default uuid_generate_v4() primary key,
+  id uuid default gen_random_uuid() primary key,
   room_id uuid references public.rooms on delete cascade not null,
   summary_text text not null,
   message_count integer not null,
@@ -130,7 +130,7 @@ create policy "Conversation summaries viewable by everyone."
 -- 7. Room lifecycle events (audit trail)
 -- ============================================================
 create table if not exists public.room_events (
-  id uuid default uuid_generate_v4() primary key,
+  id uuid default gen_random_uuid() primary key,
   room_id uuid references public.rooms on delete cascade not null,
   event_type text not null,
   metadata jsonb default '{}',
@@ -147,7 +147,7 @@ create policy "Room events viewable by everyone."
 -- 8. Orchestrator action logs
 -- ============================================================
 create table if not exists public.orchestrator_logs (
-  id uuid default uuid_generate_v4() primary key,
+  id uuid default gen_random_uuid() primary key,
   room_id uuid references public.rooms on delete cascade,
   agent_id uuid references public.agents on delete set null,
   action text not null,
@@ -170,7 +170,7 @@ create policy "Orchestrator logs service insert."
 -- 9. Token usage tracking (cost per LLM call)
 -- ============================================================
 create table if not exists public.token_usage (
-  id uuid default uuid_generate_v4() primary key,
+  id uuid default gen_random_uuid() primary key,
   agent_id uuid references public.agents on delete set null,
   room_id uuid references public.rooms on delete cascade,
   model_name text not null,

@@ -1,12 +1,16 @@
 import { createClient } from "@/lib/supabase/server";
+import { safeDecryptServer } from "@/lib/encryption/decrypt-server";
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { RoomControls } from "@/components/admin/room-controls";
 import { RoomAgentManager } from "@/components/admin/room-agent-manager";
 
+/** Encryption key shared between agent and web services */
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || "";
+
 /**
  * Room detail page: displays room info, controls, agents, and message history.
- * Uses server-side data fetching; client components handle interactive parts.
+ * Decrypts message content server-side before rendering.
  */
 export default async function RoomDetailPage({
   params,
@@ -30,6 +34,16 @@ export default async function RoomDetailPage({
     .select("id, content, sender_type, created_at, agent_id, agents(name, avatar_url)")
     .eq("room_id", params.id)
     .order("created_at", { ascending: true });
+
+  // Decrypt message content server-side
+  const decryptedMessages = (messages ?? []).map(
+    (msg: Record<string, unknown>) => ({
+      ...msg,
+      content: ENCRYPTION_KEY
+        ? safeDecryptServer(msg.content as string, ENCRYPTION_KEY)
+        : (msg.content as string),
+    })
+  );
 
   // Fetch assigned agents
   const { data: roomAgents } = await supabase
@@ -114,14 +128,14 @@ export default async function RoomDetailPage({
       <div className="bg-gray-900 border border-gray-800 rounded-lg">
         <div className="px-5 py-4 border-b border-gray-800">
           <h2 className="text-sm font-medium text-gray-400">
-            Messages ({(messages ?? []).length})
+            Messages ({decryptedMessages.length})
           </h2>
         </div>
-        {(messages ?? []).length === 0 ? (
+        {decryptedMessages.length === 0 ? (
           <p className="p-5 text-gray-500 text-sm">No messages yet.</p>
         ) : (
           <ul className="divide-y divide-gray-800/50 max-h-[600px] overflow-y-auto">
-            {(messages ?? []).map((msg: Record<string, unknown>) => {
+            {decryptedMessages.map((msg: Record<string, unknown>) => {
               const agent = msg.agents as { name: string; avatar_url: string | null } | null;
               return (
                 <li key={msg.id as string} className="px-5 py-3">
