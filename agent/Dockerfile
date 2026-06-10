@@ -7,7 +7,8 @@ RUN apk add --no-cache libc6-compat python3 make g++
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
-RUN npm ci --ignore-scripts 2>/dev/null || npm install --ignore-scripts
+# Remove --ignore-scripts to allow better-sqlite3 to download/build its binary
+RUN npm ci 2>/dev/null || npm install
 
 # ---- Build TypeScript source ----
 FROM base AS builder
@@ -28,7 +29,7 @@ ENV NODE_ENV=production
 RUN addgroup --system --gid 1001 appgroup && \
     adduser --system --uid 1001 appuser
 
-# Install wget for Docker HEALTHCHECK (alpine has no curl by default)
+# Install wget for Docker HEALTHCHECK and build tools for native deps
 RUN apk add --no-cache wget python3 make g++
 
 # Create data directory for SQLite secrets store with correct ownership
@@ -36,9 +37,13 @@ RUN mkdir -p /app/data && chown appuser:appgroup /app/data
 
 # Copy only compiled output and production deps
 COPY --from=builder /app/dist ./dist
-COPY package.json ./
+COPY package.json package-lock.json* ./
 
-RUN npm ci --omit=dev --ignore-scripts 2>/dev/null || npm install --omit=dev --ignore-scripts
+# Remove --ignore-scripts so better-sqlite3 can build its native binary
+RUN npm ci --omit=dev 2>/dev/null || npm install --omit=dev
+
+# We can remove build tools after install to save space
+RUN apk del python3 make g++
 
 USER appuser
 
