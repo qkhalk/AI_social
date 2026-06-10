@@ -42,7 +42,7 @@ export async function PATCH(request: Request, { params }: Ctx) {
     // Build update object from allowed fields only
     const updates: Record<string, unknown> = {};
     const allowed = [
-      "name", "avatar_url", "system_prompt", "model_name",
+      "name", "avatar_url", "system_prompt", "model_name", "model_credential_id",
       "personality_traits", "expertise_keywords", "writing_style",
       "is_active", "response_temperature", "max_context_messages",
     ];

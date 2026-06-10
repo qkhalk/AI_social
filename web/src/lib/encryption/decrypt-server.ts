@@ -1,75 +1,93 @@
-/**
- * Server-side AES-256-GCM Decryption
- *
- * Used in Next.js server components to decrypt message content
- * before rendering. Uses Node.js crypto module (available in
- * server components but not client components).
- *
- * Format matches agent/src/services/encryption-service.ts:
- *   base64(iv):base64(ciphertext):base64(authTag)
- */
 import { createDecipheriv } from "crypto";
 
-const ALGORITHM = "aes-256-gcm";
-const IV_LENGTH = 12;
-const AUTH_TAG_LENGTH = 16;
-
 /**
- * Decrypt an AES-256-GCM encrypted string.
- * Key must be a 64-character hex string (32 bytes).
+ * Server-side only decryption utility.
+ * Uses ENCRYPTION_KEY from environment variables.
+ * This file should only be imported in server components and API routes.
  */
-export function decryptServer(encryptedData: string, key: string): string {
-  const parts = encryptedData.split(":");
-  if (parts.length !== 3) {
-    throw new Error(
-      `Invalid encrypted data format: expected 3 parts, got ${parts.length}`
-    );
+
+function getEncryptionKey(): Buffer {
+  const key = process.env.ENCRYPTION_KEY;
+  if (!key) {
+    throw new Error("ENCRYPTION_KEY environment variable is not set");
   }
-
-  const [ivB64, ciphertext, authTagB64] = parts;
-  const iv = Buffer.from(ivB64, "base64");
-  const authTag = Buffer.from(authTagB64, "base64");
-  const keyBuffer = Buffer.from(key, "hex");
-
+  const keyBuffer = Buffer.from(key, "base64");
   if (keyBuffer.length !== 32) {
-    throw new Error(`Invalid key length: expected 32 bytes, got ${keyBuffer.length}`);
+    throw new Error("ENCRYPTION_KEY must be 32 bytes (256 bits) when base64 decoded");
   }
-  if (iv.length !== IV_LENGTH) {
-    throw new Error(`Invalid IV length: expected ${IV_LENGTH}, got ${iv.length}`);
-  }
-  if (authTag.length !== AUTH_TAG_LENGTH) {
-    throw new Error(`Invalid auth tag length: expected ${AUTH_TAG_LENGTH}, got ${authTag.length}`);
-  }
-
-  const decipher = createDecipheriv(ALGORITHM, keyBuffer, iv);
-  decipher.setAuthTag(authTag);
-  let decrypted = decipher.update(ciphertext, "base64", "utf8");
-  decrypted += decipher.final("utf8");
-  return decrypted;
+  return keyBuffer;
 }
 
 /**
- * Safe decrypt — returns raw content on failure (graceful degradation
- * for messages stored before encryption was enabled).
+ * Decrypts a base64-encoded string encrypted with encrypt().
+ * Expected format: base64(iv + authTag + ciphertext)
  */
-export function safeDecryptServer(content: string, key: string): string {
+export function decryptServer(encryptedBase64: string): string {
+  const keyBuffer = getEncryptionKey();
+  const combined = Buffer.from(encryptedBase64, "base64");
+
+  // Extract components: IV (12) + AuthTag (16) + Ciphertext (rest)
+  const iv = combined.subarray(0, 12);
+  const authTag = combined.subarray(12, 28);
+  const ciphertext = combined.subarray(28);
+
+  const decipher = createDecipheriv("aes-256-gcm", keyBuffer, iv);
+  decipher.setAuthTag(authTag);
+
+  const plaintext = Buffer.concat([
+    decipher.update(ciphertext),
+    decipher.final(),
+  ]);
+
+  return plaintext.toString("utf8");
+}
+
+/**
+ * Decrypts and parses JSON.
+ */
+export function decryptJsonServer<T extends Record<string, unknown>>(encryptedBase64: string): T {
+  const plaintext = decryptServer(encryptedBase64);
+  return JSON.parse(plaintext) as T;
+}
+
+/**
+ * Decrypts model credential config for use in API calls.
+ * Returns the decrypted config object with api_key, base_url, etc.
+ */
+export function decryptModelCredential(encryptedConfig: string): {
+  api_key?: string;
+  organization_id?: string;
+  base_url?: string;
+  [key: string]: string | undefined;
+} {
+  return decryptJsonServer(encryptedConfig);
+}
+
+/**
+ * Safe wrapper around decryptServer — returns null instead of throwing.
+ * Useful in data-fetching contexts where one bad record shouldn't crash the page.
+ */
+export function safeDecryptServer(encryptedBase64: string): string | null {
   try {
-    return decryptServer(content, key);
+    return decryptServer(encryptedBase64);
   } catch {
-    return content;
+    return null;
   }
 }
 
 /**
- * Decrypt message content for an array of messages in-place.
+ * Batch-decrypt an array of messages with a `content` field.
+ * Falls back to original content on decryption failure.
  */
 export function decryptMessagesServer<T extends { content: string }>(
   messages: T[],
-  key: string
+  _key?: string
 ): T[] {
-  if (!key) return messages;
-  return messages.map((msg) => ({
-    ...msg,
-    content: safeDecryptServer(msg.content, key),
-  }));
+  return messages.map((msg) => {
+    try {
+      return { ...msg, content: decryptServer(msg.content) };
+    } catch {
+      return msg;
+    }
+  });
 }

@@ -35,6 +35,7 @@ export default async function AgentsPage({
         avatar_url: data.avatar_url ?? "",
         system_prompt: data.system_prompt,
         model_name: data.model_name ?? "meta-llama/llama-4-scout:free",
+        model_credential_id: data.model_credential_id ?? "",
         personality_traits: data.personality_traits ?? {},
         expertise_keywords: data.expertise_keywords ?? [],
         writing_style: data.writing_style ?? "casual",

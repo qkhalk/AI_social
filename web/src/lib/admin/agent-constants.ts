@@ -36,6 +36,7 @@ export const DEFAULT_AGENT_DATA = {
   avatar_url: "",
   system_prompt: "",
   model_name: "meta-llama/llama-4-scout:free",
+  model_credential_id: "",
   personality_traits: { ...DEFAULT_TRAITS },
   expertise_keywords: [] as string[],
   writing_style: "casual" as const,

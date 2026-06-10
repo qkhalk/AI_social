@@ -11,12 +11,21 @@ export interface AgentFormData {
   avatar_url: string;
   system_prompt: string;
   model_name: string;
+  model_credential_id: string;
   personality_traits: Record<string, number>;
   expertise_keywords: string[];
   writing_style: string;
   is_active: boolean;
   response_temperature: number;
   max_context_messages: number;
+}
+
+/** Minimal credential info for the dropdown. */
+interface CredentialOption {
+  id: string;
+  credential_name: string;
+  provider_id: string;
+  model_providers: { display_name: string } | null;
 }
 
 interface AgentFormProps {
@@ -31,6 +40,23 @@ export function AgentForm({ initialData }: AgentFormProps) {
   const [form, setForm] = useState<AgentFormData>(initialData ?? { ...DEFAULT_AGENT_DATA });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [credentials, setCredentials] = useState<CredentialOption[]>([]);
+
+  // Fetch available credentials for the dropdown
+  useEffect(() => {
+    async function fetchCredentials() {
+      try {
+        const res = await fetch("/api/admin/credentials");
+        if (res.ok) {
+          const data = await res.json();
+          setCredentials(data.credentials || []);
+        }
+      } catch {
+        // Non-blocking — credential selector just stays empty
+      }
+    }
+    fetchCredentials();
+  }, []);
 
   useEffect(() => { if (initialData) setForm(initialData); }, [initialData]);
 
@@ -48,7 +74,8 @@ export function AgentForm({ initialData }: AgentFormProps) {
     try {
       const url = isEdit ? `/api/admin/agents/${initialData!.id}` : "/api/admin/agents";
       const method = isEdit ? "PATCH" : "POST";
-      const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(form) });
+      const payload = { ...form, model_credential_id: form.model_credential_id || null };
+      const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       if (!res.ok) { setError((await res.json()).error || "Operation failed."); return; }
       router.push("/admin/agents");
       router.refresh();
@@ -89,6 +116,27 @@ export function AgentForm({ initialData }: AgentFormProps) {
           </select>
         </div>
       </div>
+      {/* Model Credential Selector */}
+      {credentials.length > 0 && (
+        <div>
+          <label className="block text-sm font-medium text-gray-300 mb-1">API Credential</label>
+          <select
+            value={form.model_credential_id}
+            onChange={(e) => updateField("model_credential_id", e.target.value)}
+            className={INPUT_CLS}
+          >
+            <option value="">Default (OpenRouter)</option>
+            {credentials.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.credential_name} ({c.model_providers?.display_name || "Unknown"})
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-gray-500 mt-1">
+            Select a stored API key. Falls back to default OpenRouter key if unset.
+          </p>
+        </div>
+      )}
       <PersonalitySliders traits={form.personality_traits} onChange={updateTrait} />
       <TagInput tags={form.expertise_keywords} onChange={(tags) => updateField("expertise_keywords", tags)} label="Expertise Keywords" />
       <div className="grid grid-cols-3 gap-4">

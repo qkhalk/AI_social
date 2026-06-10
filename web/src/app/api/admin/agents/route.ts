@@ -47,6 +47,7 @@ export async function POST(request: Request) {
         avatar_url: body.avatar_url || null,
         system_prompt: body.system_prompt,
         model_name: body.model_name || "meta-llama/llama-4-scout:free",
+        model_credential_id: body.model_credential_id || null,
         personality_traits: body.personality_traits || {},
         expertise_keywords: body.expertise_keywords || [],
         writing_style: body.writing_style || "casual",

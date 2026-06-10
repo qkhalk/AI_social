@@ -5,9 +5,6 @@ import Link from "next/link";
 import { RoomControls } from "@/components/admin/room-controls";
 import { RoomAgentManager } from "@/components/admin/room-agent-manager";
 
-/** Encryption key shared between agent and web services */
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || "";
-
 /**
  * Room detail page: displays room info, controls, agents, and message history.
  * Decrypts message content server-side before rendering.
@@ -39,9 +36,7 @@ export default async function RoomDetailPage({
   const decryptedMessages = (messages ?? []).map(
     (msg: Record<string, unknown>) => ({
       ...msg,
-      content: ENCRYPTION_KEY
-        ? safeDecryptServer(msg.content as string, ENCRYPTION_KEY)
-        : (msg.content as string),
+      content: safeDecryptServer(msg.content as string) ?? (msg.content as string),
     })
   );
 
