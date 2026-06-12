@@ -19,7 +19,7 @@ export async function GET() {
 
     const { data, error } = await supabase
       .from("model_credentials")
-      .select("id, credential_name, provider_id, is_default, is_active, created_at, updated_at, model_providers(name, display_name)")
+      .select("id, credential_name, provider_id, priority, is_default, is_active, test_status, last_tested_at, last_test_error, backoff_level, last_used_at, created_at, updated_at, model_providers(name, display_name)")
       .eq("admin_id", user!.id)
       .order("created_at", { ascending: false });
 
@@ -48,11 +48,19 @@ export async function POST(request: Request) {
     if (!body.provider_id || typeof body.provider_id !== "string") {
       return NextResponse.json({ error: "Provider ID is required." }, { status: 400 });
     }
-    if (!body.credential_name || typeof body.credential_name !== "string") {
-      return NextResponse.json({ error: "Credential name is required." }, { status: 400 });
-    }
     if (!body.config || typeof body.config !== "object") {
       return NextResponse.json({ error: "Config object with api_key is required." }, { status: 400 });
+    }
+
+    // Resolve credential_name: accept empty string and default to provider display name
+    let credentialName = typeof body.credential_name === "string" ? body.credential_name.trim() : "";
+    if (!credentialName) {
+      const { data: provider } = await supabase
+        .from("model_providers")
+        .select("display_name")
+        .eq("id", body.provider_id)
+        .single();
+      credentialName = provider?.display_name ? `${provider.display_name} Key` : "Unnamed Credential";
     }
 
     // Encrypt the config
@@ -77,12 +85,16 @@ export async function POST(request: Request) {
       .insert({
         provider_id: body.provider_id,
         admin_id: user!.id,
-        credential_name: body.credential_name,
+        credential_name: credentialName,
         encrypted_config: encryptedConfig,
         is_default: body.is_default ?? false,
         is_active: body.is_active ?? true,
+        priority: typeof body.priority === "number" ? body.priority : 0,
+        test_status: "untested",
+        last_tested_at: null,
+        last_test_error: null,
       })
-      .select("id, credential_name, provider_id, is_default, is_active, created_at")
+      .select("id, credential_name, provider_id, priority, is_default, is_active, test_status, last_tested_at, last_test_error, created_at")
       .single();
 
     if (error) {

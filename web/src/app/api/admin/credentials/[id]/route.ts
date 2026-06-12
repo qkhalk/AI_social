@@ -25,7 +25,7 @@ export async function GET(
 
     const { data, error } = await supabase
       .from("model_credentials")
-      .select("id, credential_name, provider_id, is_default, is_active, created_at, updated_at, model_providers(name, display_name)")
+      .select("id, credential_name, provider_id, priority, is_default, is_active, test_status, last_tested_at, last_test_error, backoff_level, last_used_at, created_at, updated_at, model_providers(name, display_name)")
       .eq("id", id)
       .eq("admin_id", user!.id)
       .single();
@@ -59,6 +59,7 @@ export async function PATCH(
 
     if (body.credential_name !== undefined) updates.credential_name = body.credential_name;
     if (body.is_active !== undefined) updates.is_active = body.is_active;
+    if (body.priority !== undefined && typeof body.priority === "number") updates.priority = body.priority;
 
     // Re-encrypt if new config is provided
     if (body.config && typeof body.config === "object") {
@@ -67,6 +68,9 @@ export async function PATCH(
         return NextResponse.json({ error: "Encryption not configured." }, { status: 500 });
       }
       updates.encrypted_config = encryptJson(body.config, encryptionKey);
+      updates.test_status = "untested";
+      updates.last_tested_at = null;
+      updates.last_test_error = null;
     }
 
     // Handle default toggle
@@ -75,6 +79,7 @@ export async function PATCH(
         .from("model_credentials")
         .select("provider_id")
         .eq("id", id)
+        .eq("admin_id", user!.id)
         .single();
 
       if (current) {
@@ -96,7 +101,7 @@ export async function PATCH(
       .update(updates)
       .eq("id", id)
       .eq("admin_id", user!.id)
-      .select("id, credential_name, provider_id, is_default, is_active, created_at")
+      .select("id, credential_name, provider_id, priority, is_default, is_active, test_status, last_tested_at, last_test_error, created_at")
       .single();
 
     if (error) {

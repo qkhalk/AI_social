@@ -1,100 +1,56 @@
 import { createClient } from "@/lib/supabase/server";
-import { ProviderList } from "@/components/admin/provider-list";
-import { CredentialList } from "@/components/admin/credential-list";
-import { CredentialForm } from "@/components/admin/credential-form";
+import { ModelsPageClient } from "@/components/admin/models-page-client";
 
 /**
- * Models management page — two tabs: Providers and Credentials.
- * Providers are seeded via migration; admins manage credentials (encrypted API keys).
+ * Models management page — single-page layout grouped by provider.
+ * Replaces the previous two-tab UI (Providers / Credentials).
+ * Admin manages credentials (encrypted API keys) per provider.
  */
-export default async function ModelsPage({
-  searchParams,
-}: {
-  searchParams: { tab?: string; "new-cred"?: string; "edit-cred"?: string };
-}) {
+export default async function ModelsPage() {
   const supabase = await createClient();
-  const tab = searchParams.tab || "credentials";
 
-  // Fetch providers (for display and credential creation dropdown)
+  // Fetch providers
   const { data: providers } = await supabase
     .from("model_providers")
     .select("id, name, display_name, auth_type, api_base_url, is_active")
     .order("display_name", { ascending: true });
 
-  // Fetch credentials (metadata only — encrypted_config excluded)
+  // Fetch credentials with new routing fields
   const { data: credentials } = await supabase
     .from("model_credentials")
-    .select("id, credential_name, provider_id, is_default, is_active, created_at, model_providers(name, display_name)")
-    .order("created_at", { ascending: false });
+    .select("id, credential_name, provider_id, priority, is_default, is_active, test_status, last_tested_at, last_test_error, backoff_level, last_used_at, created_at")
+    .order("priority", { ascending: true });
 
-  const showCredentialForm = searchParams["new-cred"] === "1" || !!searchParams["edit-cred"];
+  // Group credentials under providers
+  const providerData = (providers || []).map((p) => ({
+    id: p.id,
+    name: p.name,
+    display_name: p.display_name,
+    auth_type: p.auth_type,
+    api_base_url: p.api_base_url,
+    is_active: p.is_active,
+    credentials: (credentials || [])
+      .filter((c) => c.provider_id === p.id)
+      .map((c) => ({
+        id: c.id,
+        credential_name: c.credential_name,
+        provider_id: c.provider_id,
+        priority: c.priority ?? 0,
+        is_default: c.is_default ?? false,
+        is_active: c.is_active ?? true,
+        test_status: c.test_status as "untested" | "testing" | "success" | "failed" | null,
+        last_tested_at: c.last_tested_at,
+        last_test_error: c.last_test_error,
+        backoff_level: c.backoff_level ?? 0,
+        last_used_at: c.last_used_at,
+      })),
+  }));
 
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-white">Models</h1>
-        {tab === "credentials" && !showCredentialForm && (
-          <a
-            href="/admin/models?tab=credentials&new-cred=1"
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition-colors"
-          >
-            + Add Credential
-          </a>
-        )}
-      </div>
+  const providerOptions = (providers || []).map((p) => ({
+    id: p.id,
+    name: p.name,
+    display_name: p.display_name,
+  }));
 
-      {/* Tab navigation */}
-      <div className="flex gap-1 mb-6 bg-gray-900 rounded-lg p-1 border border-gray-800 w-fit">
-        <a
-          href="/admin/models?tab=providers"
-          className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
-            tab === "providers"
-              ? "bg-gray-800 text-white"
-              : "text-gray-400 hover:text-gray-200"
-          }`}
-        >
-          Providers
-        </a>
-        <a
-          href="/admin/models?tab=credentials"
-          className={`px-4 py-2 text-sm font-medium rounded-md transition-colors ${
-            tab === "credentials"
-              ? "bg-gray-800 text-white"
-              : "text-gray-400 hover:text-gray-200"
-          }`}
-        >
-          Credentials
-        </a>
-      </div>
-
-      {tab === "providers" ? (
-        <div className="bg-gray-900 border border-gray-800 rounded-lg">
-          <div className="px-5 py-4 border-b border-gray-800">
-            <h2 className="text-sm font-medium text-gray-400">
-              {(providers?.length ?? 0)} providers configured
-            </h2>
-          </div>
-          <div className="p-5">
-            <ProviderList providers={providers ?? []} />
-          </div>
-        </div>
-      ) : showCredentialForm ? (
-        <div className="bg-gray-900 border border-gray-800 rounded-lg p-6">
-          <h2 className="text-lg font-semibold text-white mb-4">Add Credential</h2>
-          <CredentialForm providers={providers ?? []} />
-        </div>
-      ) : (
-        <div className="bg-gray-900 border border-gray-800 rounded-lg">
-          <div className="px-5 py-4 border-b border-gray-800">
-            <h2 className="text-sm font-medium text-gray-400">
-              {(credentials?.length ?? 0)} credentials
-            </h2>
-          </div>
-          <div className="p-5">
-            <CredentialList credentials={credentials ?? []} />
-          </div>
-        </div>
-      )}
-    </div>
-  );
+  return <ModelsPageClient providers={providerOptions} initialProviderData={providerData} />;
 }
