@@ -1,0 +1,79 @@
+# ============================================================================
+# Agent Tests — AI_social
+# ============================================================================
+# Mục đích: Chạy vitest (orchestrator tests) cho agent service
+#
+# Trigger:
+#   - push to main (chỉ khi agent/ thay đổi)
+#   - pull_request to main
+#
+# Cấu trúc: standalone workflow riêng cho agent để chạy nhanh khi chỉ
+# thay đổi agent code. Web tests đã chạy trong ci.yml.
+# ============================================================================
+
+name: Agent Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'agent/**'
+      - 'agent/package.json'
+      - 'agent/package-lock.json'
+      - '.github/workflows/agent-tests.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'agent/**'
+      - 'agent/package.json'
+      - 'agent/package-lock.json'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  test:
+    name: Vitest (agent)
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ./agent
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: agent/package-lock.json
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: Run vitest
+        run: npm test -- --run --reporter=verbose --coverage
+        env:
+          CI: true
+          # Test placeholders — tests sử dụng mocks, không cần Supabase thật
+          NEXT_PUBLIC_SUPABASE_URL: http://localhost:54321
+          SUPABASE_SERVICE_ROLE_KEY: test-placeholder
+          ENCRYPTION_KEY: test-encryption-key-32-chars-min-ok
+
+      - name: TypeScript check
+        run: npx tsc --noEmit
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-agent
+          path: agent/coverage/
+          retention-days: 7
