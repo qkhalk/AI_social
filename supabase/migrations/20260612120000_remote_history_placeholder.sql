@@ -1,0 +1,2 @@
+-- Placeholder for a migration version already recorded in the remote Supabase history.
+-- The equivalent model-management schema is present locally as 20260612_120000_model_management.sql.

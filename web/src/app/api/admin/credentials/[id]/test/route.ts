@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { requireAdmin } from "@/lib/admin/require-admin";
 import { decryptModelCredential } from "@/lib/encryption/decrypt-server";
-import { isPrivateHost } from "@/lib/gateway/is-private-host";
 
 type Provider = { name: string; api_base_url: string | null };
 type ProviderJoin = Provider | Provider[] | null;
@@ -22,8 +21,8 @@ function trimSlash(value: string) {
 function sanitizeError(message: string, apiKey?: string) {
   let sanitized = message
     .replace(/Bearer\s+\S+/gi, "Bearer [redacted]")
-    .replace(/api[_-]?key["'=:\s]+[^"',\s]+/gi, "api_key=[redacted]")
-    .replace(/authorization["'=:\s]+[^"',\s]+/gi, "authorization=[redacted]");
+    .replace(/api[_-]?key["'=:\s]+[^"',\s]+/gi, "[REDACTED]")
+    .replace(/authorization["'=:\s]+[^"',\s]+/gi, "[REDACTED]");
 
   if (apiKey) sanitized = sanitized.split(apiKey).join("[redacted]");
   return sanitized.slice(0, MAX_ERROR_LENGTH);
@@ -32,6 +31,19 @@ function sanitizeError(message: string, apiKey?: string) {
 function modelsUrl(baseUrl: string) {
   const normalized = trimSlash(baseUrl || DEFAULT_BASE_URL);
   return normalized.endsWith("/models") ? normalized : `${normalized}/models`;
+}
+
+function isPrivateHost(hostname: string) {
+  const lower = hostname.toLowerCase();
+  return (
+    lower === "localhost" ||
+    lower === "127.0.0.1" ||
+    lower === "0.0.0.0" ||
+    lower === "::1" ||
+    lower.startsWith("10.") ||
+    lower.startsWith("192.168.") ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(lower)
+  );
 }
 
 function resolveTestBaseUrl(provider: Provider | undefined, credentialBaseUrl: string | undefined) {
@@ -64,6 +76,36 @@ async function testBearerModelsEndpoint(baseUrl: string, apiKey: string) {
     if (response.ok) return null;
 
     return `Provider returned HTTP ${response.status}.`;
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      return "Provider test timed out.";
+    }
+    return error instanceof Error ? error.message : "Provider test failed.";
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Test Google Gemini API key bằng cách gọi list models.
+ * Gemini dùng query string `?key=...` thay vì Bearer header.
+ */
+async function testGeminiEndpoint(apiKey: string): Promise<string | null> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), TEST_TIMEOUT_MS);
+
+  try {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(apiKey)}`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+      cache: "no-store",
+    });
+
+    if (response.ok) return null;
+
+    return `Google API returned HTTP ${response.status}.`;
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       return "Provider test timed out.";
@@ -108,11 +150,22 @@ export async function POST(
         failure = "Credential config does not include an API key.";
       } else {
         const provider = normalizeProvider(credential.model_providers as ProviderJoin);
-        if (!provider || !["openrouter", "openai", "custom"].includes(provider.name)) {
-          failure = "Credential testing is not supported for this provider yet.";
-        } else {
+        if (!provider) {
+          failure = "Provider not found for this credential.";
+        } else if (provider.name === "google") {
+          // Google Gemini: dùng ?key=... query string
+          failure = await testGeminiEndpoint(apiKey);
+        } else if (["openrouter", "openai", "custom"].includes(provider.name)) {
+          // OpenAI-compatible
           const resolved = resolveTestBaseUrl(provider, config.base_url);
-          failure = resolved.error || await testBearerModelsEndpoint(resolved.baseUrl!, apiKey);
+          failure = resolved.error || (await testBearerModelsEndpoint(resolved.baseUrl!, apiKey));
+        } else if (provider.name === "anthropic") {
+          // Anthropic chưa implement test — chỉ check format key
+          if (!apiKey.startsWith("sk-ant-")) {
+            failure = "Anthropic API keys should start with 'sk-ant-'.";
+          }
+        } else {
+          failure = `Credential testing is not yet supported for provider '${provider.name}'.`;
         }
       }
     } catch (error) {

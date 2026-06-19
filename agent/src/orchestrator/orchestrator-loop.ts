@@ -7,8 +7,8 @@ import { RoomWithAgents, Message } from '../types';
 import { fetchActiveRoomsWithAgents, fetchRecentMessages, insertAgentMessage, insertSystemMessage, updateRoomStatus, getRoomMessageCount } from '../services/message-service';
 import { callLLM } from '../services/llm-client';
 import { logOrchestratorAction, trackTokenUsage, estimateCost } from '../services/logging-service';
-import { checkTermination } from './termination-checker';
-import { selectNextAgent } from './turn-selector';
+import { checkTermination } from "./termination-checker-class";
+import { selectNextAgent } from "./turn-selector-fns";
 import { buildContext } from './context-builder';
 import { extractMemoriesFromConversation } from '../services/memory-service';
 import { isSummaryNeeded, generateSummary } from '../services/summary-service';
@@ -133,7 +133,12 @@ export class OrchestratorLoop {
     // Call LLM with agent's configured model and temperature
     const model = agent.model_name || 'meta-llama/llama-4-scout:free';
     const temperature = agent.response_temperature ?? 0.8;
-    const response = await callLLM(model, context, temperature);
+    const response = await callLLM({
+      credentialId: agent.model_credential_id,
+      messages: context,
+      temperature,
+      maxTokens: 500,
+    });
 
     // Insert response as a new message
     await insertAgentMessage(room.id, agent.id, response.content);

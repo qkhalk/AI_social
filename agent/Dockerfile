@@ -3,12 +3,13 @@ FROM node:20-alpine AS base
 
 # ---- Install dependencies only when needed ----
 FROM base AS deps
-RUN apk add --no-cache libc6-compat python3 make g++
+RUN apk add --no-cache libc6-compat libstdc++ python3 make g++
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
-# Remove --ignore-scripts to allow better-sqlite3 to download/build its binary
-RUN npm ci 2>/dev/null || npm install
+# Run install scripts and force better-sqlite3 to compile for the container OS/ABI.
+# Native binaries copied from another platform or skipped scripts cause runtime restarts.
+RUN npm install --no-audit --no-fund && npm rebuild better-sqlite3 --build-from-source
 
 # ---- Build TypeScript source ----
 FROM base AS builder
@@ -18,6 +19,20 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 RUN npm run build
+
+# ============================================================================
+# STAGE: tester — chạy vitest, giữ đầy đủ devDeps
+# ============================================================================
+# Build: docker build --target tester -t ai_social_agent:tester -f agent/Dockerfile agent/.
+# Run:   docker run --rm ai_social_agent:tester
+# ============================================================================
+FROM base AS tester
+WORKDIR /app
+RUN apk add --no-cache wget libc6-compat libstdc++
+COPY --from=deps /app/node_modules ./node_modules
+COPY . .
+RUN npm run build
+CMD ["npm", "run", "test"]
 
 # ---- Production runner ----
 FROM base AS runner
@@ -29,21 +44,17 @@ ENV NODE_ENV=production
 RUN addgroup --system --gid 1001 appgroup && \
     adduser --system --uid 1001 appuser
 
-# Install wget for Docker HEALTHCHECK and build tools for native deps
-RUN apk add --no-cache wget python3 make g++
+# Install wget for Docker HEALTHCHECK and runtime libs required by native deps.
+RUN apk add --no-cache wget libc6-compat libstdc++
 
 # Create data directory for SQLite secrets store with correct ownership
 RUN mkdir -p /app/data && chown appuser:appgroup /app/data
 
-# Copy only compiled output and production deps
+# Copy only compiled output and the node_modules built inside the Linux image.
 COPY --from=builder /app/dist ./dist
+COPY --from=deps /app/node_modules ./node_modules
 COPY package.json package-lock.json* ./
-
-# Remove --ignore-scripts so better-sqlite3 can build its native binary
-RUN npm ci --omit=dev 2>/dev/null || npm install --omit=dev
-
-# We can remove build tools after install to save space
-RUN apk del python3 make g++
+RUN npm prune --omit=dev
 
 USER appuser
 

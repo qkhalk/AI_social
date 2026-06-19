@@ -1,22 +1,12 @@
-/**
- * Gateway chat completions route with multi-credential fallback loop.
- * Tries credentials in priority order; on error, locks the model on that
- * credential and tries the next one. Max 3 attempts per request.
- */
-
 import { NextResponse } from "next/server";
 import { authenticateGatewayRequest } from "@/lib/gateway/gateway-api-key";
 import { checkGatewayRateLimit, recordGatewayUsage } from "@/lib/gateway/gateway-rate-limit";
-import { getCredentialsForProvider, selectCredential } from "@/lib/gateway/credential-selector";
-import { lockCredential, unlockCredential } from "@/lib/gateway/credential-lock";
-import { incrementBackoffLevel, resetBackoffLevel } from "@/lib/gateway/credential-backoff";
-import { classifyError } from "@/lib/gateway/error-classifier";
+import { getDefaultGatewayCredential } from "@/lib/gateway/provider-credential";
 import { enforceRequestBodyLimit, fetchWithTimeout, readResponseTextBounded } from "@/lib/gateway/bounded-fetch";
 
 const MAX_REQUEST_BODY_BYTES = 128_000;
 const MAX_PROVIDER_RESPONSE_BYTES = 2_000_000;
 const CHAT_TIMEOUT_MS = 60_000;
-const MAX_FALLBACK_ATTEMPTS = 3;
 
 function getUsage(payload: unknown) {
   const usage = (payload as { usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } })?.usage;
@@ -54,17 +44,6 @@ function validateGatewayChatBody(body: Record<string, unknown>) {
   return null;
 }
 
-/**
- * Determine which provider to use based on the requested model.
- * Currently only OpenAI-compatible providers are routable.
- */
-function detectProvider(modelName: string): "openai" | "openrouter" | null {
-  const lower = modelName.toLowerCase();
-  if (lower.startsWith("gpt-") || lower.startsWith("o1-") || lower.startsWith("o3-")) return "openai";
-  if (lower.includes("/") || lower.startsWith("anthropic/") || lower.startsWith("claude/")) return "openrouter";
-  return "openrouter";
-}
-
 export async function POST(request: Request) {
   const started = Date.now();
   const auth = await authenticateGatewayRequest(request);
@@ -89,100 +68,59 @@ export async function POST(request: Request) {
   const requestedModel = String((body as { model?: string }).model || "");
   if (!requestedModel) return NextResponse.json({ error: { message: "model is required." } }, { status: 400 });
 
-  const providerName = detectProvider(requestedModel);
-  if (!providerName) {
-    return NextResponse.json({ error: { message: "Unsupported model for gateway routing." } }, { status: 400 });
-  }
-
-  // Fetch all active credentials for the detected provider
-  const credentials = await getCredentialsForProvider(providerName);
-  if (credentials.length === 0) {
+  const credential = await getDefaultGatewayCredential(auth.supabase, auth.apiKey.model_credential_id);
+  if ("error" in credential) {
     await recordGatewayUsage(auth.supabase, {
       api_key_id: auth.apiKey.id,
       model_name: requestedModel,
       status: "failed",
       latency_ms: Date.now() - started,
-      error_message: `No active credentials for provider ${providerName}.`,
+      error_message: credential.error,
     });
-    return NextResponse.json({ error: { message: `No active credentials for provider ${providerName}.` } }, { status: 503 });
+    return NextResponse.json({ error: { message: credential.error } }, { status: 503 });
   }
 
-  // Fallback loop: try credentials in priority order
-  const triedCredentialIds = new Set<string>();
-  const errors: string[] = [];
+  try {
+    const response = await fetchWithTimeout(`${credential.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${credential.apiKey}`,
+        "Content-Type": "application/json",
+        Accept: (body as { stream?: boolean }).stream ? "text/event-stream" : "application/json",
+      },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    }, CHAT_TIMEOUT_MS);
 
-  for (let attempt = 0; attempt < MAX_FALLBACK_ATTEMPTS; attempt++) {
-    const remainingCredentials = credentials.filter((c) => !triedCredentialIds.has(c.id));
-    const credential = await selectCredential(remainingCredentials, requestedModel);
+    const rawText = response.ok ? await readResponseTextBounded(response, MAX_PROVIDER_RESPONSE_BYTES) : "";
+    const text = response.ok ? rawText : JSON.stringify({ error: { message: `Provider returned HTTP ${response.status}.`, type: "provider_error" } });
+    let json: unknown = null;
+    try { json = JSON.parse(text); } catch { json = null; }
+    const usage = response.ok && json ? getUsage(json) : { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
 
-    if (!credential) {
-      errors.push("No unlocked credentials available.");
-      break;
-    }
+    await recordGatewayUsage(auth.supabase, {
+      api_key_id: auth.apiKey.id,
+      model_name: requestedModel,
+      provider_name: credential.providerName,
+      status: response.ok ? "success" : "failed",
+      ...usage,
+      latency_ms: Date.now() - started,
+      error_message: response.ok ? null : `Provider returned HTTP ${response.status}.`,
+    });
 
-    triedCredentialIds.add(credential.credentialId);
-
-    try {
-      const response = await fetchWithTimeout(`${credential.baseUrl}/chat/completions`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${credential.apiKey}`,
-          "Content-Type": "application/json",
-          Accept: (body as { stream?: boolean }).stream ? "text/event-stream" : "application/json",
-        },
-        body: JSON.stringify(body),
-        cache: "no-store",
-      }, CHAT_TIMEOUT_MS);
-
-      if (response.ok) {
-        // Success: clear lock + reset backoff
-        await unlockCredential(credential.credentialId, requestedModel);
-        await resetBackoffLevel(credential.credentialId);
-
-        const rawText = await readResponseTextBounded(response, MAX_PROVIDER_RESPONSE_BYTES);
-        let json: unknown = null;
-        try { json = JSON.parse(rawText); } catch { json = null; }
-        const usage = json ? getUsage(json) : { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
-
-        await recordGatewayUsage(auth.supabase, {
-          api_key_id: auth.apiKey.id,
-          model_name: requestedModel,
-          provider_name: credential.providerName,
-          status: "success",
-          ...usage,
-          latency_ms: Date.now() - started,
-        });
-
-        return new Response(rawText, {
-          status: response.status,
-          headers: { "content-type": response.headers.get("content-type") || "application/json" },
-        });
-      }
-
-      // Error response: classify and lock
-      const errorText = await readResponseTextBounded(response, MAX_PROVIDER_RESPONSE_BYTES);
-      const classified = classifyError({ status: response.status, body: errorText });
-      const cooldownSec = Math.min(300, classified.baseCooldown * (2 ** (remainingCredentials[0]?.backoff_level || 0)));
-
-      await lockCredential(credential.credentialId, requestedModel, classified.type, errorText, cooldownSec);
-      await incrementBackoffLevel(credential.credentialId);
-
-      errors.push(`Credential ${credential.credentialId}: HTTP ${response.status} (${classified.type})`);
-    } catch {
-      // Network/timeout error
-      await lockCredential(credential.credentialId, requestedModel, "connection_error", "Unable to reach provider.", 30);
-      errors.push(`Credential ${credential.credentialId}: connection error`);
-    }
+    return new Response(text, {
+      status: response.status,
+      headers: { "content-type": response.headers.get("content-type") || "application/json" },
+    });
+  } catch {
+    await recordGatewayUsage(auth.supabase, {
+      api_key_id: auth.apiKey.id,
+      model_name: requestedModel,
+      provider_name: credential.providerName,
+      status: "failed",
+      latency_ms: Date.now() - started,
+      error_message: "Unable to reach provider.",
+    });
+    return NextResponse.json({ error: { message: "Unable to reach provider." } }, { status: 502 });
   }
-
-  // All credentials exhausted
-  const finalError = errors.length > 0 ? errors.join("; ") : "All credentials exhausted.";
-  await recordGatewayUsage(auth.supabase, {
-    api_key_id: auth.apiKey.id,
-    model_name: requestedModel,
-    status: "failed",
-    latency_ms: Date.now() - started,
-    error_message: finalError,
-  });
-  return NextResponse.json({ error: { message: finalError } }, { status: 503 });
 }

@@ -9,8 +9,10 @@ interface ChatMessage {
   content: string;
 }
 
-const MEMORY_CHAR_BUDGET = 800; // Max chars for memory context block
-const SUMMARY_CHAR_BUDGET = 600; // Max chars for conversation summary
+const MEMORY_TOKEN_BUDGET = 200; // ~800 chars at 4 chars/token
+function memChars() { return MEMORY_TOKEN_BUDGET * 4; }
+const SUMMARY_TOKEN_BUDGET = 150; // ~600 chars
+function sumChars() { return SUMMARY_TOKEN_BUDGET * 4; }
 
 /**
  * Build the full LLM context for an agent's turn.
@@ -24,45 +26,33 @@ export async function buildContext(
 ): Promise<ChatMessage[]> {
   const messages: ChatMessage[] = [];
 
-  // System message: agent identity, personality, and writing style
-  messages.push({
-    role: 'system',
-    content: buildSystemPrompt(agent),
-  });
+  // 1) System message: agent identity, personality, writing style
+  messages.push({ role: 'system', content: buildSystemPrompt(agent) });
 
-  // Relevant past memories: retrieved via embedding similarity, best-effort
+  // 2) Final instruction ngay sau system prompt (LLM chú ý system đầu/cuối)
+  messages.push({ role: 'system', content: buildFinalInstruction(agent) });
+
+  // 3) Relevant past memories: best-effort
   const memoryContext = await buildMemoryContext(agent.id, recentMessages);
   if (memoryContext) {
     messages.push({ role: 'system', content: memoryContext });
   }
 
-  // Conversation summary: compressed history for long conversations
+  // 4) Conversation summary: compressed history
   const summaryContext = await buildSummaryContext(room.id, recentMessages.length);
   if (summaryContext) {
     messages.push({ role: 'system', content: summaryContext });
   }
 
-  // Room context: what the conversation is about
-  messages.push({
-    role: 'system',
-    content: buildRoomContext(room),
-  });
+  // 5) Room context
+  messages.push({ role: 'system', content: buildRoomContext(room) });
 
-  // Conversation history: most recent messages, truncated to agent's context limit
+  // 6) Conversation history (newest-first -> chronological)
   const limit = agent.max_context_messages || DEFAULT_CONTEXT_MESSAGES;
-  const history = recentMessages
-    .slice(0, limit)
-    .reverse(); // DB returns newest-first, LLM needs chronological order
-
+  const history = recentMessages.slice(0, limit).reverse();
   for (const msg of history) {
     messages.push(mapHistoryMessage(msg, agent));
   }
-
-  // Final instruction: behavioral guardrails for response generation
-  messages.push({
-    role: 'system',
-    content: buildFinalInstruction(agent),
-  });
 
   return messages;
 }
@@ -75,7 +65,8 @@ async function buildMemoryContext(agentId: string, recentMessages: Message[]): P
   try {
     if (recentMessages.length === 0) return '';
 
-    const queryText = recentMessages[0].content;
+    // Truncate query text để embedding model không bị reject (>8192 token)
+    const queryText = recentMessages[0].content.slice(0, 2000);
     const queryEmbedding = await generateEmbedding(queryText);
     const memories = await retrieveRelevantMemories(agentId, queryEmbedding, 3);
 
@@ -84,7 +75,7 @@ async function buildMemoryContext(agentId: string, recentMessages: Message[]): P
     const parts = memories.map(
       (m) => `[${m.memory_type}] ${m.content}`
     );
-    const combined = parts.join('\n').slice(0, MEMORY_CHAR_BUDGET);
+    const combined = parts.join('\n').slice(0, memChars());
 
     return `Relevant past memories:\n${combined}`;
   } catch {
@@ -103,7 +94,7 @@ async function buildSummaryContext(roomId: string, messageCount: number): Promis
     const summary = await getLatestSummary(roomId);
     if (!summary) return '';
 
-    const text = summary.summary_text.slice(0, SUMMARY_CHAR_BUDGET);
+    const text = summary.summary_text.slice(0, sumChars());
     return `Previous conversation summary: ${text}`;
   } catch {
     return '';
@@ -145,12 +136,12 @@ function buildRoomContext(room: Room): string {
  * all other messages as 'user' (to avoid role conflicts).
  */
 function mapHistoryMessage(msg: Message, currentAgent: Agent): ChatMessage {
+  // Tin nhắn của chính agent này -> role 'assistant'
+  // Tin nhắn của agent khác hoặc user -> role 'user' (tránh role conflict trong LLM)
   const isOwnMessage = msg.agent_id === currentAgent.id;
-  const content = isOwnMessage ? msg.content : msg.content;
-
   return {
     role: isOwnMessage ? 'assistant' : 'user',
-    content,
+    content: msg.content,
   };
 }
 

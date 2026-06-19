@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyTurnstile } from "@/lib/turnstile/verify-server";
 import { createClient } from "@/lib/supabase/server";
+import { adminOnlySignupError, isAdminOnlyAuthMode } from "@/lib/auth/access-policy";
 
 /**
  * POST /api/auth/signup
@@ -11,6 +12,10 @@ import { createClient } from "@/lib/supabase/server";
  */
 export async function POST(request: NextRequest) {
   try {
+    if (isAdminOnlyAuthMode()) {
+      return NextResponse.json({ error: adminOnlySignupError() }, { status: 403 });
+    }
+
     const body = await request.json();
     const { email: rawEmail, password, turnstileToken } = body;
     const email = rawEmail?.trim();

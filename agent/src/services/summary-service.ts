@@ -1,6 +1,7 @@
-import { callLLM } from './llm-client';
+import { callLLMWithFallback } from './llm-client';
 import { storeConversationSummary, getLatestSummary } from './memory-service';
 import { Message } from '../types';
+import { providerRegistry } from './provider-registry';
 
 // Generate a summary every N messages to compress conversation history
 const SUMMARY_INTERVAL = 30;
@@ -29,27 +30,21 @@ export async function isSummaryNeeded(roomId: string, currentMessageCount: numbe
 }
 
 /**
- * Generate a conversation summary using LLM and persist it.
- * Summaries compress the conversation history so agents maintain context
- * without needing the full message history in the prompt.
+ * Generate a summary using any available credential (fallback chain).
  */
-export async function generateSummary(
-  roomId: string,
-  messages: Message[]
-): Promise<string> {
+export async function generateSummary(roomId: string, messages: Message[]): Promise<void> {
+  if (messages.length === 0) return;
+
+  // Build summary prompt
   const messageText = messages
-    .slice() // Don't mutate original
-    .reverse() // Chronological order for LLM
-    .map((m) => `${m.sender_type === 'system' ? 'System' : `Agent ${m.agent_id?.slice(0, 8)}`}: ${m.content}`)
+    .slice(0, 20)
+    .map((m) => (m.agent_id ? `[Agent] ${m.content}` : `[System] ${m.content}`))
     .join('\n');
 
   const summaryPrompt = [
     {
       role: 'system' as const,
-      content:
-        'Summarize the following conversation in 3-5 sentences. ' +
-        'Focus on: key topics discussed, conclusions reached, and any disagreements. ' +
-        'Be concise and factual.',
+      content: 'You are a concise summarizer. Summarize conversations in 2-3 sentences.',
     },
     {
       role: 'user' as const,
@@ -57,23 +52,25 @@ export async function generateSummary(
     },
   ];
 
+  // Get all credentials as fallback chain
+  const allCredentials = providerRegistry.listAll().flatMap(({ credentials }) =>
+    credentials.map((c) => c.id)
+  );
+
+  if (allCredentials.length === 0) {
+    console.warn('[summary-service] No credentials available, skipping summary');
+    return;
+  }
+
   try {
-    const response = await callLLM(
-      'meta-llama/llama-4-scout:free',
-      summaryPrompt,
-      0.3, // Low temperature for factual summary
-      300
-    );
+    const response = await callLLMWithFallback(allCredentials, summaryPrompt, {
+      temperature: 0.3,
+      maxTokens: 300,
+    });
 
     const summaryText = response.content.trim();
-
     await storeConversationSummary(roomId, summaryText, messages.length);
-
-    console.log(`[summary-service] Generated summary for room ${roomId} (${messages.length} messages)`);
-    return summaryText;
-  } catch (error: unknown) {
-    const msg = error instanceof Error ? error.message : String(error);
-    console.error(`[summary-service] Failed to generate summary: ${msg}`);
-    return '';
+  } catch (err) {
+    console.error(`[summary-service] All credentials failed:`, err);
   }
 }

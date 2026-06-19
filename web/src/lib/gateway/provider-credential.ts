@@ -1,11 +1,5 @@
-/**
- * Gateway credential resolution: backwards-compatible single credential lookup.
- * For multi-credential fallback/routing, use credential-selector.ts instead.
- */
-
 import { createServiceRoleClient } from "@/lib/supabase/service-role";
 import { decryptModelCredential } from "@/lib/encryption/decrypt-server";
-import { isPrivateHost } from "@/lib/gateway/is-private-host";
 
 type ProviderJoin = { name: string; display_name: string; api_base_url: string | null } | { name: string; display_name: string; api_base_url: string | null }[] | null;
 
@@ -58,6 +52,11 @@ export async function getDefaultGatewayCredential(
     baseUrl: baseUrlResult.baseUrl!,
     apiKey,
   };
+}
+
+function isPrivateHost(hostname: string) {
+  const lower = hostname.toLowerCase();
+  return lower === "localhost" || lower === "127.0.0.1" || lower === "0.0.0.0" || lower === "::1" || lower.startsWith("10.") || lower.startsWith("192.168.") || /^172\.(1[6-9]|2\d|3[0-1])\./.test(lower);
 }
 
 function resolveSafeBaseUrl(providerName: string, providerBaseUrl: string | null, credentialBaseUrl?: string) {

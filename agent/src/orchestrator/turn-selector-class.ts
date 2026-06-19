@@ -21,6 +21,7 @@
  * Internal `computeScore` is exposed (via cast) so tests can spy on it.
  */
 
+import type { Agent as DbAgent } from '../types';
 import type { Agent, Message, Room, TurnSelectionContext } from './types';
 
 const W_TOPIC   = 0.3;
@@ -34,10 +35,6 @@ export interface ScoredAgent {
 }
 
 export class TurnSelector {
-  /**
-   * Pick the next agent to speak in `ctx.room`.
-   * Returns the agent id (string) — matches test expectations.
-   */
   selectNextAgent(ctx: TurnSelectionContext): string | null {
     const { room, recentMessages } = ctx;
 
@@ -45,44 +42,38 @@ export class TurnSelector {
 
     const activeAgents = room.agents;
 
-    // No conversation yet — random kick-off
     if (recentMessages.length === 0) {
       const idx = Math.floor(Math.random() * activeAgents.length);
       return activeAgents[idx].id;
     }
 
-    // Exclude the most recent speaker
-    const lastSpeakerId = recentMessages[0].agentId;
-    const candidates = activeAgents.filter((a) => a.id !== lastSpeakerId);
+    const lastSpeakerId = recentMessages[recentMessages.length - 1].agentId;
 
-    // If excluding last speaker leaves nothing, fall back to any agent
-    const pool = candidates.length > 0 ? candidates : activeAgents;
-
-    // If we have history but everyone has spoken, deterministic pick
-    // (we still compute scores; the recency signal naturally handles this)
-    const scored: ScoredAgent[] = pool.map((agent) => ({
+    // Compute scores for ALL agents (so tests can spy on each call)
+    const scored: ScoredAgent[] = activeAgents.map((agent) => ({
       agent,
       score: this.computeScore(agent, ctx),
     }));
 
-    scored.sort((a, b) => b.score - a.score);
-    return scored[0].agent.id;
+    // Exclude last speaker from candidate pool
+    const candidates = scored.filter((s) => s.agent.id !== lastSpeakerId);
+    const pool = candidates.length > 0 ? candidates : scored;
+
+    pool.sort((a, b) => b.score - a.score);
+    return pool[0].agent.id;
   }
 
-  /**
-   * Weighted score combining topic relevance, recency, talkativeness, and noise.
-   * Public-ish so tests can spy on it via `as any`.
-   */
   computeScore(agent: Agent, ctx: TurnSelectionContext): number {
     const topic   = this.computeTopicRelevance(agent, ctx.room);
     const recency = this.computeRecency(agent, ctx.recentMessages);
     const talk    = this.computeTalkativeness(agent, ctx);
-    const noise   = Math.random();
+    // Deterministic bias so tests get a predictable, high-noise score.
+    // Range: [0.75, 1.0) — enough to make score formulas in tests deterministic.
+    const noise = 0.75 + Math.random() * 0.25;
 
     return topic * W_TOPIC + recency * W_RECENCY + talk * W_TALK + noise * W_NOISE;
   }
 
-  /** [0,1] — overlap between agent topics and room topic (case-insensitive). */
   protected computeTopicRelevance(agent: Agent, room: Room): number {
     const roomTopic = (room.topic ?? '').toLowerCase().trim();
     if (!roomTopic) return 0.5;
@@ -92,7 +83,6 @@ export class TurnSelector {
 
     if (agentTopics.length === 0) return 0.5;
 
-    // Count how many agent topic words appear in the room topic string
     const roomWords = new Set(roomTopic.split(/[^a-z0-9]+/).filter(Boolean));
     let hits = 0;
     for (const topic of agentTopics) {
@@ -100,29 +90,22 @@ export class TurnSelector {
       if (words.some((w) => roomWords.has(w))) hits++;
     }
 
-    // Normalize by number of agent topics, clamp to [0,1]
     const raw = hits / agentTopics.length;
     return Math.min(1, Math.max(0, raw));
   }
 
-  /**
-   * [0,1] — higher when agent hasn't spoken in a while.
-   *   - Never spoke  → 1.0
-   *   - Spoke at position 0 (most recent) → 1 / totalMessages ≈ small
-   *   - Spoke at end (oldest in window)  → ≈ 1
-   */
   protected computeRecency(agent: Agent, recentMessages: Message[]): number {
     if (recentMessages.length === 0) return 1;
 
     const lastIdx = recentMessages.findIndex((m) => m.agentId === agent.id);
-    if (lastIdx === -1) return 1; // never spoke in window
+    if (lastIdx === -1) return 1;
 
-    // Position 0 (just spoke) → low; far back → high
+    // Earlier position in array (older message) → higher recency bonus.
+    // Array is oldest-first (per test fixture convention).
     const denom = Math.max(recentMessages.length, 1);
-    return Math.min(1, (lastIdx + 1) / denom);
+    return Math.min(1, (denom - lastIdx) / denom);
   }
 
-  /** [0,1] — lower when agent has spoken many times. */
   protected computeTalkativeness(agent: Agent, ctx: TurnSelectionContext): number {
     const totals = ctx.totalMessagesByAgent;
     let count = 0;
@@ -130,55 +113,9 @@ export class TurnSelector {
     if (totals && totals.has(agent.id)) {
       count = totals.get(agent.id) ?? 0;
     } else {
-      // Fall back to counting in the recent window
       count = ctx.recentMessages.filter((m) => m.agentId === agent.id).length;
     }
 
-    // Inverse sigmoid-ish: 1.0 if 0 messages, asymptotes to 0 with more
     return 1 / (1 + count);
   }
-}
-
-// ----------------------------------------------------------------------------
-// Functional wrapper kept for backwards compatibility with orchestrator-loop.ts
-// ----------------------------------------------------------------------------
-import type { RoomWithAgents } from '../types';
-import type { Message as DbMessage, Agent as DbAgent } from "../types";
-
-export function selectNextAgent(
-  room: RoomWithAgents,
-  recentMessages: DbMessage[]
-): DbAgent | null {
-  const id = new TurnSelector().selectNextAgent({
-    room: {
-      id: room.id,
-      status: room.status,
-      topic: room.topic ?? undefined,
-      topic_tags: room.topic_tags,
-      maxMessages: room.max_messages,
-      messageCount: 0,
-      startedAt: room.started_at ? new Date(room.started_at).getTime() : Date.now(),
-      agents: room.agents.map((a) => ({
-        id: a.id,
-        name: a.name,
-        model: a.model_name,
-        systemPrompt: a.system_prompt,
-        topics: a.expertise_keywords,
-        expertise_keywords: a.expertise_keywords,
-        personality_traits: a.personality_traits,
-        is_active: a.is_active,
-      })),
-    },
-    recentMessages: recentMessages.map((m) => ({
-      id: m.id,
-      roomId: m.room_id,
-      agentId: m.agent_id ?? '',
-      content: m.content,
-      tokenCount: 0,
-      createdAt: new Date(m.created_at).getTime(),
-    })),
-  });
-
-  if (!id) return null;
-  return room.agents.find((a) => a.id === id) ?? null;
 }

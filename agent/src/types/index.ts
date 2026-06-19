@@ -6,6 +6,7 @@ export interface Agent {
   expertise_keywords: string[];
   writing_style: string;
   model_name: string;
+  model_credential_id?: string;
   is_active: boolean;
   max_context_messages: number;
   response_temperature: number;

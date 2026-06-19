@@ -11,12 +11,9 @@
  *
  * Built as a class (per tests). Functional wrapper kept for compatibility
  * with orchestrator-loop.ts.
- *
- * IMPORTANT: per tests, the reason returned is a SHORT label
- * (e.g. "admin_override", "hard_cap"), not the descriptive string the old
- * function returned. The descriptive reason is exposed via `reasonDetail`.
  */
 
+import type { Room as DbRoom, Message as DbMessage } from '../types';
 import type {
   Room,
   Message,
@@ -28,7 +25,7 @@ import type {
 // Defaults
 // ----------------------------------------------------------------------------
 const DEFAULT_ROOM_TOKEN_BUDGET    = 10_000;
-const DEFAULT_ROOM_MAX_DURATION_MS = 60 * 60 * 1000; // 1 hour
+const DEFAULT_ROOM_MAX_DURATION_MS = 60 * 60 * 1000;
 const DEFAULT_REPETITION_THRESHOLD = 0.7;
 const DEFAULT_REPETITION_WINDOW    = 3;
 const DEFAULT_END_MARKER           = '###END###';
@@ -56,29 +53,21 @@ export class TerminationChecker {
     this.endMarker           = opts.endMarker           ?? DEFAULT_END_MARKER;
   }
 
-  /**
-   * Evaluate the 6 layers in priority order.
-   * Returns the first triggered layer's reason.
-   */
   check(ctx: TerminationCheckContext): TerminationResult {
     const { room, recentMessages, totalTokensUsed } = ctx;
 
-    // Layer 6 (per test naming): admin override
     if (room.status && room.status !== 'active') {
       return { shouldStop: true, reason: 'admin_override' };
     }
 
-    // Layer 1: hard cap
     if (room.messageCount >= room.maxMessages) {
       return { shouldStop: true, reason: 'hard_cap' };
     }
 
-    // Layer 2: token budget
     if ((totalTokensUsed ?? 0) >= this.tokenBudget) {
       return { shouldStop: true, reason: 'token_budget' };
     }
 
-    // Layer 3: time limit
     if (room.startedAt) {
       const elapsed = Date.now() - room.startedAt;
       if (elapsed > this.maxDurationMs) {
@@ -86,7 +75,6 @@ export class TerminationChecker {
       }
     }
 
-    // Layer 4: repetition (Jaccard over last N messages)
     if (recentMessages.length >= this.repetitionWindow) {
       const window = recentMessages.slice(0, this.repetitionWindow);
       const similarity = pairwiseMaxJaccard(window);
@@ -95,9 +83,8 @@ export class TerminationChecker {
       }
     }
 
-    // Layer 5: natural end marker in last message
     if (recentMessages.length >= 1) {
-      const last = recentMessages[0];
+      const last = recentMessages[recentMessages.length - 1];
       if (last.content && last.content.includes(this.endMarker)) {
         return { shouldStop: true, reason: 'natural_end' };
       }
@@ -110,8 +97,6 @@ export class TerminationChecker {
 // ----------------------------------------------------------------------------
 // Functional wrapper for orchestrator-loop.ts compatibility
 // ----------------------------------------------------------------------------
-import type { Room as DbRoom, Message as DbMessage } from '../types';
-
 export function checkTermination(
   room: DbRoom,
   messageCount: number,
@@ -146,12 +131,11 @@ export function checkTermination(
     totalTokensUsed,
   });
 
-  // Old functional API returned a descriptive reason string. Preserve that.
   const descriptive = describeReason(result.reason, {
     messageCount,
     maxMessages: room.max_messages,
     totalTokensUsed,
-    budget: checker['tokenBudget'],
+    budget: (checker as any)['tokenBudget'],
   });
 
   return { shouldStop: result.shouldStop, reason: descriptive };
@@ -195,7 +179,6 @@ function pairwiseMaxJaccard(messages: Message[]): number {
 }
 
 function tokenize(text: string): Set<string> {
-  // Simple word tokenizer; lowercases and drops very short / non-alpha tokens
   const words = (text ?? '').toLowerCase().match(/[a-zà-ỹ0-9]+/giu) || [];
   return new Set(words.filter((w) => w.length >= 2));
 }

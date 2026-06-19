@@ -1,12 +1,7 @@
-/**
- * Gateway models listing route. Uses single best credential for model listing
- * (no fallback loop needed -- listing is non-critical and idempotent).
- */
-
 import { NextResponse } from "next/server";
 import { authenticateGatewayRequest } from "@/lib/gateway/gateway-api-key";
 import { checkGatewayRateLimit, recordGatewayUsage } from "@/lib/gateway/gateway-rate-limit";
-import { getCredentialsForProvider, selectCredential } from "@/lib/gateway/credential-selector";
+import { getDefaultGatewayCredential } from "@/lib/gateway/provider-credential";
 import { fetchWithTimeout, readResponseTextBounded } from "@/lib/gateway/bounded-fetch";
 
 const MODELS_TIMEOUT_MS = 10_000;
@@ -20,29 +15,16 @@ export async function GET(request: Request) {
   const limit = await checkGatewayRateLimit(auth.supabase, auth.apiKey);
   if (!limit.allowed) return NextResponse.json({ error: { message: limit.error } }, { status: 429 });
 
-  // Try openrouter first (broader model catalog)
-  const openrouterCreds = await getCredentialsForProvider("openrouter");
-  let credential = await selectCredential(openrouterCreds, "models");
-
-  if (!credential) {
-    const openaiCreds = await getCredentialsForProvider("openai");
-    credential = await selectCredential(openaiCreds, "models");
-  }
-
-  if (!credential) {
-    const customCreds = await getCredentialsForProvider("custom");
-    credential = await selectCredential(customCreds, "models");
-  }
-
-  if (!credential) {
+  const credential = await getDefaultGatewayCredential(auth.supabase, auth.apiKey.model_credential_id);
+  if ("error" in credential) {
     await recordGatewayUsage(auth.supabase, {
       api_key_id: auth.apiKey.id,
       model_name: "models",
       status: "failed",
       latency_ms: Date.now() - started,
-      error_message: "No active credentials available for model listing.",
+      error_message: credential.error,
     });
-    return NextResponse.json({ error: { message: "No active credentials available." } }, { status: 503 });
+    return NextResponse.json({ error: { message: credential.error } }, { status: 503 });
   }
 
   try {

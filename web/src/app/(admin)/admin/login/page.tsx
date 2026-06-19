@@ -10,7 +10,7 @@ import { TurnstileWidget } from "@/components/auth/turnstile-widget";
  * On success, redirects to /admin dashboard.
  */
 export default function AdminLoginPage() {
-  const [email, setEmail] = useState("admin@doralove.io.vn");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [turnstileToken, setTurnstileToken] = useState("");
   const [error, setError] = useState("");
@@ -100,7 +100,7 @@ export default function AdminLoginPage() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            placeholder="admin@doralove.io.vn"
+            placeholder="admin@example.com"
           />
         </div>
 
