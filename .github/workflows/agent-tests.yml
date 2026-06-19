@@ -15,14 +15,14 @@ name: Agent Tests
 
 on:
   push:
-    branches: [main]
+    branches: [master, main]
     paths:
       - 'agent/**'
       - 'agent/package.json'
       - 'agent/package-lock.json'
       - '.github/workflows/agent-tests.yml'
   pull_request:
-    branches: [main]
+    branches: [master, main]
     paths:
       - 'agent/**'
       - 'agent/package.json'
