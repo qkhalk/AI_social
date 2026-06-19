@@ -57,9 +57,12 @@ jobs:
 
       - name: Install dependencies
         run: npm install --no-audit --no-fund
+        # better-sqlite3 needs build tools on Linux runner for native compile
+        env:
+          npm_config_build_from_source: true
 
       - name: Run vitest
-        run: npm test -- --run --reporter=verbose --coverage
+        run: npm test -- --run --reporter=verbose
         env:
           CI: true
           # Test placeholders — tests sử dụng mocks, không cần Supabase thật
@@ -70,10 +73,10 @@ jobs:
       - name: TypeScript check
         run: npx tsc --noEmit
 
-      - name: Upload coverage
+      - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: coverage-agent
-          path: agent/coverage/
+          name: vitest-results
+          path: agent/test-results/
           retention-days: 7
