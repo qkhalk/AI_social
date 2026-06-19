@@ -52,8 +52,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
-          cache-dependency-path: agent/package-lock.json
+          # Cache skipped: package-lock.json not in agent/ (npm install used in Dockerfile)
+          # Re-enable if/when lockfile is committed
 
       - name: Install dependencies
         run: npm install --no-audit --no-fund
